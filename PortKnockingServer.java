@@ -1,4 +1,3 @@
-
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -10,16 +9,18 @@ import java.util.Timer;
 import java.util.TimerTask;
 
 public class PortKnockingServer {
-    private static final int SERVICE_PORT = 22; // Port du service à ouvrir
-    private static final int TIMEOUT = 5000; // Temps maximum entre les knocks en millisecondes
-    private static final int OPEN_PORT_DURATION = 600000; // Durée pendant laquelle le port reste ouvert (en millisecondes)
-    private final int[] knockPorts;
-    private final List<ClientKnock> clientKnocks = new ArrayList<>();
+    private static final int SERVICE_PORT = 22; // Port du service à ouvrir (SSH)
+    private static final int TIMEOUT = 5000; // Temps maximum entre les knocks en millisecondes (5 secondes)
+    private static final int OPEN_PORT_DURATION = 600000; // Durée pendant laquelle le port reste ouvert (600 secondes ou 10 minutes)
+    private final int[] knockPorts; // Séquence des ports de knocking
+    private final List<ClientKnock> clientKnocks = new ArrayList<>(); // Liste des tentatives de knocking des clients
 
+    // Constructeur prenant en paramètre la séquence de ports de knocking
     public PortKnockingServer(int[] knockPorts) {
         this.knockPorts = knockPorts;
     }
 
+    // Méthode pour démarrer le serveur de port knocking
     public void startServer() throws IOException {
         // Démarrer un thread pour chaque port de knocking
         for (int port : knockPorts) {
@@ -29,9 +30,11 @@ public class PortKnockingServer {
         System.out.println("Port knocking server is running...");
     }
 
+    // Classe interne pour écouter les knocks sur un port spécifique
     private class KnockListener implements Runnable {
         private final int port;
 
+        // Constructeur prenant en paramètre le port à écouter
         public KnockListener(int port) {
             this.port = port;
         }
@@ -42,31 +45,34 @@ public class PortKnockingServer {
                 byte[] buffer = new byte[1024];
                 while (true) {
                     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-                    socket.receive(packet);
-                    InetAddress address = packet.getAddress();
-                    processKnock(address, port);
+                    socket.receive(packet); // Réception d'un paquet UDP
+                    InetAddress address = packet.getAddress(); // Adresse du client
+                    processKnock(address, port); // Traitement du knock
                 }
             } catch (IOException e) {
                 e.printStackTrace();
             }
         }
 
+        // Méthode pour traiter un knock d'un client sur un port donné
         private void processKnock(InetAddress clientAddress, int port) {
             synchronized (clientKnocks) {
                 ClientKnock clientKnock = getClientKnock(clientAddress);
                 if (clientKnock == null) {
-                    clientKnock = new ClientKnock(clientAddress);
+                    clientKnock = new ClientKnock(clientAddress); // Créer un nouvel objet ClientKnock si non existant
                     clientKnocks.add(clientKnock);
                 }
 
+                // Si la séquence de knocking est complète
                 if (clientKnock.processKnock(port)) {
                     System.out.println("Port knocking sequence completed by: " + clientAddress);
-                    openServicePort(clientAddress);
-                    clientKnocks.remove(clientKnock);
+                    openServicePort(clientAddress); // Ouvrir le port du service pour ce client
+                    clientKnocks.remove(clientKnock); // Retirer le client de la liste
                 }
             }
         }
 
+        // Méthode pour obtenir un ClientKnock pour une adresse spécifique
         private ClientKnock getClientKnock(InetAddress clientAddress) {
             for (ClientKnock clientKnock : clientKnocks) {
                 if (clientKnock.getAddress().equals(clientAddress)) {
@@ -76,13 +82,14 @@ public class PortKnockingServer {
             return null;
         }
 
+        // Méthode pour ouvrir le port du service pour une adresse client
         private void openServicePort(InetAddress clientAddress) {
             String ipAddress = clientAddress.getHostAddress();
             String addRuleCommand = String.format("sudo iptables -A INPUT -p tcp -s %s --dport %d -j ACCEPT", ipAddress, SERVICE_PORT);
             String deleteRuleCommand = String.format("sudo iptables -D INPUT -p tcp -s %s --dport %d -j ACCEPT", ipAddress, SERVICE_PORT);
 
             try {
-                // Ajouter la règle iptables
+                // Ajouter la règle iptables pour autoriser l'accès SSH
                 Process addProcess = Runtime.getRuntime().exec(new String[]{"bash", "-c", addRuleCommand});
                 int addExitCode = addProcess.waitFor();
                 if (addExitCode == 0) {
@@ -114,10 +121,11 @@ public class PortKnockingServer {
         }
     }
 
+    // Classe interne pour représenter une tentative de knocking d'un client
     private class ClientKnock {
         private final InetAddress address;
-        private int currentStep;
-        private long lastKnockTime;
+        private int currentStep; // Étape actuelle de la séquence de knocking
+        private long lastKnockTime; // Heure du dernier knock
 
         public ClientKnock(InetAddress address) {
             this.address = address;
@@ -129,20 +137,21 @@ public class PortKnockingServer {
             return address;
         }
 
+        // Méthode pour traiter un knock sur un port spécifique
         public boolean processKnock(int port) {
             long currentTime = System.currentTimeMillis();
             if (currentTime - lastKnockTime > TIMEOUT) {
-                currentStep = 0;
+                currentStep = 0; // Réinitialiser la séquence si le temps écoulé entre les knocks est trop long
             }
             lastKnockTime = currentTime;
 
             if (knockPorts[currentStep] == port) {
-                currentStep++;
+                currentStep++; // Passer à l'étape suivante
                 if (currentStep == knockPorts.length) {
-                    return true;
+                    return true; // Séquence de knocking complète
                 }
             } else {
-                currentStep = 0;
+                currentStep = 0; // Réinitialiser la séquence si le knock ne correspond pas
             }
 
             return false;
@@ -157,12 +166,12 @@ public class PortKnockingServer {
 
         for (int i = 0; i < 3; i++) {
             System.out.print("Port " + (i + 1) + ": ");
-            knockPorts[i] = scanner.nextInt();
+            knockPorts[i] = scanner.nextInt(); // Lire la séquence de ports de knocking
         }
 
         try {
             PortKnockingServer server = new PortKnockingServer(knockPorts);
-            server.startServer();
+            server.startServer(); // Démarrer le serveur de port knocking
         } catch (IOException e) {
             e.printStackTrace();
         }
